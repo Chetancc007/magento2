@@ -1,0 +1,137 @@
+version: '3'
+services:
+  redis:
+    container_name: magento-redis
+    image: redis:6.0
+    restart: 'always'
+    env_file:
+      - installer.env
+    volumes:
+      - ./redis-data:/data
+    ports:
+      - 6379
+    healthcheck:
+      test: 'redis-cli ping || exit 1'
+      interval: 30s
+      timeout: 30s
+      retries: 3
+    networks:
+      - magento
+  varnish:
+    container_name: magento-varnish
+    image: varnish:latest
+    restart: 'always'
+    env_file:
+      - .env
+    volumes:
+      - ./conf/varnish/varnish.secret:/etc/varnish/secret
+    ports:
+      - '80:80'
+      - "6082:6082"
+    depends_on:
+      - web
+    networks:
+      - magento
+  web:
+    container_name: ${WEB_CONTAINER_NAME}
+    image: nginx:1.21.1
+    env_file:
+      - .env
+    restart: on-failure:5
+    depends_on:
+      - fpm
+    volumes:
+      - ./htdocs:/app:rw,delegated
+      - ./conf/ssl.conf:/etc/nginx/ssl.conf
+      - ./conf/ssl:/etc/nginx/ssl
+# If want to use varnish then comment below 3 lines
+    ports:
+      - 80:80
+      - 443:443
+    command: [nginx-debug, '-g', 'daemon off;']
+    networks:
+      - magento
+  fpm:
+    container_name: magento-php-fpm
+    image: php-fpm7.4:latest
+    restart: on-failure:5
+    depends_on:
+      - mysql
+    env_file:
+      - .env
+    expose:
+      - ${FPM_PORT}
+    volumes:
+      - ./htdocs:/app:rw,delegated
+    networks:
+      - magento
+  cli:
+      container_name: magento-php-cli
+      image: php7.4-cli:latest
+      tty: true
+      depends_on:
+        - mysql
+      volumes:
+        - ./htdocs:/app:rw,delegated
+        - ~/.composer/cache:/root/.composer/cache
+        - ./auth.json:/root/.composer/auth.json
+      env_file:
+        - .env
+      networks:
+        - magento
+  cron:
+    container_name: magento-php-cron
+    image: php7.4-cli:latest
+    command: ["run-cron", "--privileged"]
+    depends_on:
+      - mysql
+    tty: true
+    env_file:
+      - .env
+    volumes:
+      - ./htdocs:/app:rw,delegated
+    networks:
+      - magento
+  rabbitmq:
+    container_name: magento-rabbitmq
+    image: rabbitmq:3.9.5
+    ports:
+      - 5672:5672
+      - 15672:15672
+    volumes:
+      - ./rabbitmq-data:/data
+  elasticsearch:
+    image: elasticsearch:7.9.0
+    container_name: magento-elasticsearch
+    env_file:
+      - .env
+    networks:
+      - magento
+    ports:
+      - 9200:9200
+    volumes:
+      - ./elastic-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: [ "CMD-SHELL", "curl --silent --fail localhost:9200/_cat/nodes?v\\&pretty || exit 1" ]
+  mysql:
+    container_name: magento-mysql
+    image: mariadb:10.4
+    healthcheck:
+      test: 'mysqladmin ping --silent'
+    restart: on-failure:5
+    env_file:
+      - installer.env
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./dbs-data:/var/lib/mysql:rw,delegated
+    networks:
+      - magento
+volumes:
+  redis-data:
+  rabbitmq-data:
+#  elastic-data:
+#  dbs-data:
+networks:
+  magento:
+    driver: bridge
